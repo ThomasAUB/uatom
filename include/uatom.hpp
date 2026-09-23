@@ -105,7 +105,7 @@ namespace uatom {
                 }
                 else {
                     const CriticalSection cs;
-                    value = mValue;
+                    copyRepresentation(value, mValue);
                 }
                 if (inOrder != std::memory_order_relaxed) {
                     policy_t::fence();
@@ -122,7 +122,7 @@ namespace uatom {
                 }
                 else {
                     const CriticalSection cs;
-                    mValue = inValue;
+                    copyRepresentation(mValue, inValue);
                 }
                 if (inOrder == std::memory_order_seq_cst) {
                     policy_t::fence();
@@ -152,10 +152,10 @@ namespace uatom {
                     const CriticalSection cs;
                     exchanged = sameRepresentation(mValue, ioExpected);
                     if (exchanged) {
-                        mValue = inDesired;
+                        copyRepresentation(mValue, inDesired);
                     }
                     else {
-                        ioExpected = mValue;
+                        copyRepresentation(ioExpected, mValue);
                     }
                 }
                 if (fenced) {
@@ -238,6 +238,34 @@ namespace uatom {
                 }
             }
 
+            // Copies the object representation. Assigning a struct lets the
+            // compiler call memcpy (GCC does at -O0 for under-aligned types),
+            // so non-scalars are copied by an inline loop whose volatile
+            // accesses can't be turned back into a library call. The loop
+            // uses the widest unit that the alignment and size of T allow.
+            static void copyRepresentation(T& outDst, const T& inSrc) noexcept {
+                if constexpr (std::is_scalar<T>::value) {
+                    outDst = inSrc;
+                }
+                else {
+                    using unit_t = typename std::conditional<
+                        (alignof(T) % 4 == 0) && (sizeof(T) % 4 == 0), uint32_t,
+                        typename std::conditional<
+                            (alignof(T) % 2 == 0) && (sizeof(T) % 2 == 0), uint16_t,
+                            uint8_t>::type>::type;
+#if defined(__GNUC__) || defined(__clang__)
+                    typedef unit_t __attribute__((may_alias)) alias_t;
+#else
+                    typedef unit_t alias_t;
+#endif
+                    auto* dst = reinterpret_cast<volatile alias_t*>(&outDst);
+                    const auto* src = reinterpret_cast<const volatile alias_t*>(&inSrc);
+                    for (size_t i = 0; i < sizeof(T) / sizeof(unit_t); ++i) {
+                        dst[i] = src[i];
+                    }
+                }
+            }
+
             template<typename F>
             T update(F&& inOperation, std::memory_order inOrder) noexcept {
                 if (inOrder != std::memory_order_relaxed) {
@@ -246,8 +274,9 @@ namespace uatom {
                 T previous;
                 {
                     const CriticalSection cs;
-                    previous = mValue;
-                    mValue = inOperation(previous);
+                    copyRepresentation(previous, mValue);
+                    const T next = inOperation(previous);
+                    copyRepresentation(mValue, next);
                 }
                 if (inOrder != std::memory_order_relaxed) {
                     policy_t::fence();
