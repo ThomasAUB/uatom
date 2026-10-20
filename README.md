@@ -65,6 +65,26 @@ performs it only :
 
 The inline assembly uses the GNU extended syntax : GCC, clang and Arm Compiler 6.
 
+## Critical section
+
+`uatom::CriticalSection` makes a block atomic against every other context
+entering one, when several accesses must form a single step. Sections nest.
+
+```cpp
+{
+    const uatom::CriticalSection cs;
+    if (!node.next) {
+        node.next = head;
+        head = &node;
+    }
+}
+```
+
+- On every M-profile core, it masks interrupts through `PRIMASK`, with the
+  limitations above whatever the core : one core, privileged code.
+- On hosted builds, it takes a process-wide recursive lock, so it must not be
+  entered from a signal handler.
+
 ## Configuration
 
 The interrupt masking implementation is selected on M-profile cores without

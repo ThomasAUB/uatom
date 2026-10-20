@@ -61,6 +61,15 @@
 #endif
 #endif
 
+// uatom::CriticalSection masks interrupts through PRIMASK on every M-profile
+// core, with the limits above, and takes a process-wide lock on hosted builds.
+#if defined(__ARM_ARCH_PROFILE) && (__ARM_ARCH_PROFILE == 'M')
+#define UATOM_DETAIL_M_PROFILE 1
+#else
+#define UATOM_DETAIL_M_PROFILE 0
+#include <mutex>
+#endif
+
 namespace uatom {
 
     namespace detail {
@@ -287,7 +296,7 @@ namespace uatom {
             T mValue;
         };
 
-#if UATOM_IRQ_MASK
+#if UATOM_IRQ_MASK || UATOM_DETAIL_M_PROFILE
         struct PrimaskPolicy final {
             // The "memory" clobbers keep the compiler from moving accesses
             // out of the critical section.
@@ -316,5 +325,35 @@ namespace uatom {
     template<typename T>
     using Atomic = std::atomic<T>;
 #endif
+
+    /**
+     * @brief Makes a block atomic against every other context entering one,
+     * so that several accesses form one step. Calls may nest.
+     *
+     * On M-profile cores, masks interrupts : only valid between contexts of
+     * one core, running privileged. On hosted builds, takes a process-wide
+     * recursive lock, so it must not be entered from a signal handler.
+     */
+    struct CriticalSection final {
+#if UATOM_DETAIL_M_PROFILE
+        CriticalSection() noexcept : mState(detail::PrimaskPolicy::enter()) {}
+        ~CriticalSection() { detail::PrimaskPolicy::exit(mState); }
+#else
+        CriticalSection() { mutex().lock(); }
+        ~CriticalSection() { mutex().unlock(); }
+#endif
+        CriticalSection(const CriticalSection&) = delete;
+        CriticalSection& operator=(const CriticalSection&) = delete;
+
+    private:
+#if UATOM_DETAIL_M_PROFILE
+        const uint32_t mState;
+#else
+        static std::recursive_mutex& mutex() {
+            static std::recursive_mutex sMutex;
+            return sMutex;
+        }
+#endif
+    };
 
 }
