@@ -312,6 +312,21 @@ namespace uatom {
 #if UATOM_IRQ_MASK
     template<typename T>
     using Atomic = detail::IrqMaskAtomic<T, detail::PrimaskPolicy>;
+
+    /**
+     * @brief Masks interrupts for its lifetime, the way each Atomic<T>
+     * operation does, so that several of them form one atomic step.
+     * Only defined where Atomic<T> masks interrupts, with the same limits.
+     * Calls may nest.
+     */
+    struct IrqMaskGuard final {
+        IrqMaskGuard() noexcept : mState(detail::PrimaskPolicy::enter()) {}
+        ~IrqMaskGuard() { detail::PrimaskPolicy::exit(mState); }
+        IrqMaskGuard(const IrqMaskGuard&) = delete;
+        IrqMaskGuard& operator=(const IrqMaskGuard&) = delete;
+    private:
+        const uint32_t mState;
+    };
 #else
     template<typename T>
     using Atomic = std::atomic<T>;
